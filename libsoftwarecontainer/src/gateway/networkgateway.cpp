@@ -23,6 +23,8 @@
 #include "unistd.h"
 #include "networkgateway.h"
 #include "generators.h"
+#include <libiptc/libiptc.h>
+#include <netdb.h>
 
 NetworkGateway::NetworkGateway() :
     Gateway(ID),
@@ -37,7 +39,7 @@ NetworkGateway::~NetworkGateway()
 
 ReturnCode NetworkGateway::readConfigElement(const json_t *element)
 {
-    Entry e;
+    IPTableEntry e;
     if (!read(element, "type", e.type)) {
         log_error() << "No type specified in network config.";
         return ReturnCode::FAILURE;
@@ -76,7 +78,7 @@ ReturnCode NetworkGateway::readConfigElement(const json_t *element)
     json_t *val;
     json_array_foreach(rules, ix, val) {
         if (json_is_object(val)) {
-            if (isError(parseRule(val, e.rules))) {
+            if (isError(parseRule(val, e.m_rules))) {
                 log_error() << "Could not parse rule config";
                 return ReturnCode::FAILURE;
             }
@@ -92,8 +94,9 @@ ReturnCode NetworkGateway::readConfigElement(const json_t *element)
         return ReturnCode::FAILURE;
     }
 
-    e.defaultTarget = parseTarget(readTarget);
-    if (e.defaultTarget == Target::INVALID_TARGET) {
+    if (parseTarget(readTarget)) {
+        e.defaultTarget = readTarget;
+    } else {
         log_error() << "Default target '" << readTarget << "' is not a supported target.Invalid target.";
         return ReturnCode::FAILURE;
     }
@@ -102,7 +105,7 @@ ReturnCode NetworkGateway::readConfigElement(const json_t *element)
 
     // --- TEMPORARY WORKAROUND ---
     // in the wait of activate() being rewritten
-    if (e.defaultTarget == Target::ACCEPT) {
+    if ("ACCEPT" == e.defaultTarget) {
         m_internetAccess = true;
         m_gateway = "10.0.3.1";
     }
@@ -110,23 +113,30 @@ ReturnCode NetworkGateway::readConfigElement(const json_t *element)
     return ReturnCode::SUCCESS;
 }
 
-ReturnCode NetworkGateway::parseRule(const json_t *element, std::vector<Rule> &rules)
+ReturnCode NetworkGateway::parseRule(const json_t *element, std::vector<IPTableEntry::Rule> &rules)
 {
-    Rule r;
+    IPTableEntry::Rule r;
     std::string target;
     if (!read(element, "target", target)) {
         log_error() << "Target not specified in the network config";
         return ReturnCode::FAILURE;
     }
 
-    r.target = parseTarget(target);
-    if (r.target == Target::INVALID_TARGET) {
+    if (parseTarget(target)) {
+        r.target = target;
+    } else {
         log_error() << target << " is not a valid target.";
         return ReturnCode::FAILURE;
     }
 
-    if (!read(element, "host", r.host)) {
+    std::string host;
+    if (!read(element, "host", host)) {
         log_error() << "Host not specified in the network config.";
+        return ReturnCode::FAILURE;
+    }
+
+    if (ReturnCode::FAILURE == parseHost(host, r.host)) {
+        log_error() << host << "is not valid host";
         return ReturnCode::FAILURE;
     }
 
@@ -139,6 +149,28 @@ ReturnCode NetworkGateway::parseRule(const json_t *element, std::vector<Rule> &r
     // and assume that all ports should be considered in the rule.
 
     rules.push_back(r);
+    return ReturnCode::SUCCESS;
+}
+
+ReturnCode NetworkGateway::parseHost(const std::string hostname, IPTableEntry::Host &host)
+{
+    auto pos = hostname.find("/");
+    auto s_ipaddr = hostname.substr(0, pos);
+    auto s_mask = hostname.substr(pos+1, hostname.size());
+
+    if (inet_pton(AF_INET, s_ipaddr.c_str(), &host.hostIP.s_addr)) {
+        // its ip address
+        log_debug() << "its hostname " << s_ipaddr << ":" << host.hostIP.s_addr << " " << s_mask;
+        host.hostMask.s_addr = (0xFFFFFFFF << (32 - std::stoi(s_mask))) & 0xFFFFFFFF;
+        return ReturnCode::SUCCESS;
+    }
+
+    //its hostname
+    auto converter = gethostbyname(s_ipaddr.c_str());
+    memcpy(&host.hostIP.s_addr, converter->h_addr_list[0], converter->h_length);
+    log_debug() << "its ipaddr " << s_ipaddr << "host.hostIP.s_addr:" << host.hostIP.s_addr;
+    host.hostMask.s_addr = 0xFFFFFFFF;
+
     return ReturnCode::SUCCESS;
 }
 
@@ -193,20 +225,12 @@ ReturnCode NetworkGateway::parsePort(const json_t *element, std::vector<unsigned
     return ReturnCode::SUCCESS;
 }
 
-NetworkGateway::Target NetworkGateway::parseTarget(const std::string &str)
+bool NetworkGateway::parseTarget(const std::string &str)
 {
-    if (str == "ACCEPT") {
-        return Target::ACCEPT;
+    if (str == "ACCEPT" || str == "DROP" || str == "REJECT") {
+        return true;
     }
-
-    if (str == "DROP") {
-        return Target::DROP;
-    }
-
-    if (str == "REJECT") {
-        return Target::REJECT;
-    }
-    return Target::INVALID_TARGET;
+    return false;
 }
 
 bool NetworkGateway::activateGateway()
@@ -230,6 +254,10 @@ bool NetworkGateway::activateGateway()
 
     if (m_internetAccess) {
         generateIP();
+        log_debug() << "Trying to apply rules";
+        for (auto entry:m_entries) {
+            entry.applyRules();
+        }
         return up();
     } else {
         return down();
@@ -347,3 +375,87 @@ bool NetworkGateway::isBridgeAvailable()
     return isSuccess(m_netlinkHost.hasAddress(addresses, AF_INET, m_gateway.c_str()));
 }
 
+std::string IPTableEntry::getChain() {
+    if ( "INCOMING" == type) {
+        return "INPUT";
+    } else if ("OUTGOING" == type) {
+        return "OUTPUT";
+    } else if ("FORWARD" == type) {
+        return "FORWARD";
+    }
+    return "";
+}
+
+bool IPTableEntry::applyRules()
+{
+    struct xtc_handle *handle;
+
+    handle = iptc_init ("filter");
+
+    if (!handle) {
+        log_error() << "Could not init IPTC library ";
+        return false;
+    }
+
+    for (auto rule:m_rules) {
+        if (!insertRule(rule, getChain(), handle)) {
+            log_error() << "Couldn't apply the rule " << rule.target;
+        }
+    }
+
+    if (!iptc_commit (handle))
+    {
+        log_error() <<  "Could not commit changes in iptables " << iptc_strerror (errno);
+        return true;
+    }
+
+
+    iptc_free(handle);
+    return true;
+}
+
+
+bool IPTableEntry::insertRule(Rule rule, std::string type, struct xtc_handle *handle)
+{
+    struct _entry
+    {
+        _entry () {
+            memset(this, 0, sizeof(_entry));
+            this->target.target.u.user.target_size = XT_ALIGN(sizeof(struct xt_standard_target));
+            this->entry.target_offset = sizeof (struct ipt_entry);
+            this->entry.next_offset = this->entry.target_offset + this->target.target.u.user.target_size;
+        };
+        struct ipt_entry entry;
+        struct xt_standard_target target;
+    } entry;
+
+
+    strncpy(entry.target.target.u.user.name
+            , rule.target.c_str()
+            , sizeof (entry.target.target.u.user.name));
+
+    log_debug() << "IP:" << rule.host.hostIP.s_addr << " mask:" << rule.host.hostMask.s_addr << " target:" <<
+                rule.target << " entry target:" << entry.target.target.u.user.name;
+
+     entry.entry.ip.src.s_addr = rule.host.hostIP.s_addr;
+     entry.entry.ip.smsk.s_addr = rule.host.hostMask.s_addr;
+
+     if (rule.ports.empty()) {
+        if (!iptc_append_entry (type.c_str(), (struct ipt_entry *) &entry, handle)) {
+            log_error() << "Could not insert a rule in iptables " << iptc_strerror (errno);
+            return false;
+        }
+     } else {
+         for (auto port:rule.ports) {
+             entry.entry.ip.proto = port;
+             if (!iptc_append_entry (type.c_str(), (struct ipt_entry *) &entry, handle)) {
+                 log_error() << "Could not add port filter "
+                             << port << " in iptables "
+                             << iptc_strerror (errno);
+                 return false;
+             }
+         }
+     }
+
+    return true;
+}

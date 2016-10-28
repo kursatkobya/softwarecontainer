@@ -26,6 +26,50 @@
 #include "jansson.h"
 #include "netlink.h"
 
+
+/**
+ * @brief A rule entry for the treatment of packets.
+ */
+struct IPTableEntry
+{
+    LOG_DECLARE_CLASS_CONTEXT("IPTBL", "IPTableEntry");
+    /**
+     * @brief host ip addr and mask of a rule in an entry
+     */
+    struct Host {
+        struct in_addr hostIP;
+        struct in_addr hostMask;
+    };
+
+    /**
+     * @brief Definition of a 'Rule' used to handle network traffic. Used internally in Entry.
+     */
+    struct Rule
+    {
+        Host host;
+        std::vector<unsigned int> ports;
+        std::string target;
+    };
+    /**
+     * @brief Inserts a rule to iptables
+     * @return
+     */
+    bool insertRule(Rule rule, std::string type, struct xtc_handle *handle);
+    std::string getChain();
+
+    /**
+     * @brief Applies all rules of the entry to iptables
+     * @return
+     */
+    bool applyRules();
+
+    unsigned int priority;
+    std::string type;
+    std::vector<Rule> m_rules;
+    std::string defaultTarget;
+};
+
+
 /**
  * @brief Sets up and manages network access and routing to the container
  *
@@ -35,7 +79,7 @@
  * three targets: ACCEPT, DROP and REJECT.
  */
 class NetworkGateway :
-    public Gateway
+        public Gateway
 {
     LOG_DECLARE_CLASS_CONTEXT("NETG", "Network gateway");
 
@@ -123,42 +167,10 @@ private:
      */
     virtual bool isBridgeAvailable();
 
-    /**
-     * @brief Targets for Rules
-     */
-    enum Target
-    {
-         INVALID_TARGET,
-         ACCEPT,
-         DROP,
-         REJECT
-    };
-
-    /**
-     * @brief Definition of a 'Rule' used to handle network traffic. Used internally in Entry.
-     */
-    struct Rule
-    {
-         std::string host;
-         std::vector<unsigned int> ports;
-         Target target;
-    };
-
-    /**
-     * @brief An entry parsed from given configurations by readConfigElement()
-     */
-    struct Entry
-    {
-         unsigned int priority;
-         std::string type;
-         std::vector<Rule> rules;
-         Target defaultTarget;
-    };
-
     std::string m_ip;
     std::string m_gateway;
 
-    std::vector<Entry> m_entries;
+    std::vector<IPTableEntry> m_entries;
 
     bool m_internetAccess;
     bool m_interfaceInitialized;
@@ -171,7 +183,15 @@ private:
      * @return ReturnCode::SUCCESS if the rule is successfully parsed
      * @return ReturnCode::FAILURE otherwise.
      */
-    virtual ReturnCode parseRule(const json_t *element, std::vector<Rule> &rules);
+    virtual ReturnCode parseRule(const json_t *element, std::vector<IPTableEntry::Rule> &rules);
+
+    /**
+     * @brief Parses host from json element
+     * @return ReturnCode::SUCCESS if the rule is successfully parsed
+     * @return ReturnCode::FAILURE otherwise.
+     */
+    virtual ReturnCode parseHost(const std::string hostname, IPTableEntry::Host &host);
+
 
     /**
      * @brief Parses a ports from an json element
@@ -182,7 +202,7 @@ private:
 
     /**
      * @brief Parses a string to a Target
-     * @return Either the valid Target representation of the given string or Target::INVALID_TARGET
+     * @return Either the valid Target representation of true or false
      */
-    virtual Target parseTarget(const std::string &str);
+    bool parseTarget(const std::string &str);
 };

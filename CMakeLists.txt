@@ -54,6 +54,7 @@ pkg_check_modules(DBusCpp       REQUIRED dbus-c++-glib-1>=0.9.0)
 pkg_check_modules(Glibmm        REQUIRED glibmm-2.4>=2.42.0)
 pkg_check_modules(LXC           REQUIRED lxc>=2.0.0)
 pkg_check_modules(Jansson       REQUIRED jansson>=2.6)
+pkg_check_modules(libiptc	REQUIRED libiptc)
 
 add_definitions(${IVILogging_CFLAGS_OTHER})
 add_definitions(${DBusCpp_CFLAGS_OTHER})
@@ -81,6 +82,7 @@ link_directories(${DBusCpp_LIBRARY_DIRS})
 link_directories(${Glibmm_LIBRARY_DIRS})
 link_directories(${LXC_LIBRARY_DIRS})
 link_directories(${Jansson_LIBRARY_DIRS})
+link_directories(${libiptc_LIBRARY_DIRS})
 
 #
 # All available options goes here
@@ -137,7 +139,7 @@ message(STATUS "LXC template will be installed in " ${LXC_TEMPLATE_DIR})
 # Set C++ compiler flags
 #
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wunused -Wall -std=c++11 -pedantic -Wextra")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wunused -Wall -std=gnu++11 -pedantic -Wextra")
 if(ENABLE_PROFILING)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DPROFILING_ENABLED=1")
 endif()

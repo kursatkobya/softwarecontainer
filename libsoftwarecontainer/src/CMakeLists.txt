@@ -62,6 +62,7 @@ TARGET_LINK_LIBRARIES( softwarecontainerlib
     ${Glibmm_LIBRARIES}
     ${LXC_LIBRARIES}
     ${Jansson_LIBRARIES}
+    ${libiptc_LIBRARIES}
 )
 
 include_directories(${LIBSOFTWARECONTAINER_DIR}/include)
