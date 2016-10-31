@@ -25,14 +25,15 @@
 #include "generators.h"
 #include "jansson.h"
 #include "netlink.h"
-
+#include <libiptc/libiptc.h>
 
 /**
  * @brief A rule entry for the treatment of packets.
  */
 struct IPTableEntry
 {
-    LOG_DECLARE_CLASS_CONTEXT("IPTBL", "IPTableEntry");
+    LOG_DECLARE_CLASS_CONTEXT("IPTB", "IPTableEntry");
+
     /**
      * @brief host ip addr and mask of a rule in an entry
      */

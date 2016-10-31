@@ -23,7 +23,7 @@
 #include "unistd.h"
 #include "networkgateway.h"
 #include "generators.h"
-#include <libiptc/libiptc.h>
+
 #include <netdb.h>
 
 NetworkGateway::NetworkGateway() :
@@ -414,6 +414,7 @@ bool IPTableEntry::applyRules()
     return true;
 }
 
+#if true
 
 bool IPTableEntry::insertRule(Rule rule, std::string type, struct xtc_handle *handle)
 {
@@ -422,13 +423,16 @@ bool IPTableEntry::insertRule(Rule rule, std::string type, struct xtc_handle *ha
         _entry () {
             memset(this, 0, sizeof(_entry));
             this->target.target.u.user.target_size = XT_ALIGN(sizeof(struct xt_standard_target));
-            this->entry.target_offset = sizeof (struct ipt_entry);
+            this->entry.target_offset = XT_ALIGN(sizeof(struct ipt_entry)) +
+                    XT_ALIGN(sizeof(struct ipt_entry_match)) + XT_ALIGN(sizeof(struct ipt_tcp));
             this->entry.next_offset = this->entry.target_offset + this->target.target.u.user.target_size;
         };
+
         struct ipt_entry entry;
+        struct ipt_entry_match match_proto;
+        struct ipt_tcp tcpinfo;
         struct xt_standard_target target;
     } entry;
-
 
     strncpy(entry.target.target.u.user.name
             , rule.target.c_str()
@@ -440,15 +444,19 @@ bool IPTableEntry::insertRule(Rule rule, std::string type, struct xtc_handle *ha
      entry.entry.ip.src.s_addr = rule.host.hostIP.s_addr;
      entry.entry.ip.smsk.s_addr = rule.host.hostMask.s_addr;
 
+     entry.match_proto.u.match_size = sizeof(struct ipt_entry_match) + sizeof(struct ipt_tcp);
+     strcpy(entry.match_proto.u.user.name, "tcp");
+
      if (rule.ports.empty()) {
-        if (!iptc_append_entry (type.c_str(), (struct ipt_entry *) &entry, handle)) {
+        if (!iptc_append_entry (type.c_str(), &entry.entry, handle)) {
             log_error() << "Could not insert a rule in iptables " << iptc_strerror (errno);
             return false;
         }
      } else {
          for (auto port:rule.ports) {
-             entry.entry.ip.proto = port;
-             if (!iptc_append_entry (type.c_str(), (struct ipt_entry *) &entry, handle)) {
+             entry.tcpinfo.spts[0] = 0;
+             entry.tcpinfo.spts[1] = ntohs(port);
+             if (!iptc_append_entry (type.c_str(), &entry.entry, handle)) {
                  log_error() << "Could not add port filter "
                              << port << " in iptables "
                              << iptc_strerror (errno);
@@ -459,3 +467,104 @@ bool IPTableEntry::insertRule(Rule rule, std::string type, struct xtc_handle *ha
 
     return true;
 }
+
+#else
+
+bool IPTableEntry::insertRule(Rule rule, std::string type, struct xtc_handle *handle)
+{
+    struct ipt_entry * e;
+    struct ipt_entry_match * match_proto, * match_limit, * match_physdev;
+    struct ipt_entry_target * target;
+    struct ipt_tcp * tcpinfo;
+    struct xt_rateinfo * rateinfo;
+    struct xt_physdev_info * physdevinfo;
+    unsigned int size_ipt_entry, size_ipt_entry_match, size_ipt_entry_target, size_ipt_tcp, size_rateinfo, size_physdevinfo, total_length;
+
+    size_ipt_entry = XT_ALIGN(sizeof(struct ipt_entry));
+    size_ipt_entry_match = XT_ALIGN(sizeof(struct ipt_entry_match));
+    size_ipt_entry_target = XT_ALIGN(sizeof(struct ipt_entry_target));
+    size_ipt_tcp = XT_ALIGN(sizeof(struct ipt_tcp));
+    size_rateinfo = XT_ALIGN(sizeof(struct xt_rateinfo));
+    size_physdevinfo = XT_ALIGN(sizeof(struct xt_physdev_info));
+    total_length =  size_ipt_entry + size_ipt_entry_match * 3 + size_ipt_entry_target + size_ipt_tcp + size_rateinfo + size_physdevinfo;
+
+    //memory allocation for all structs that represent the netfilter rule we want to insert
+    e = (struct ipt_entry *) calloc(1, total_length);
+    //offsets to the other bits:
+    //target struct begining
+    e->target_offset = size_ipt_entry + size_ipt_entry_match * 3 + size_ipt_tcp + size_rateinfo + size_physdevinfo;
+    //next "e" struct, end of the current one
+    e->next_offset = total_length;
+
+    //  Filter IP
+    e->ip.src.s_addr     = rule.host.hostIP.s_addr;
+    e->ip.smsk.s_addr    = rule.host.hostMask.s_addr;
+    e->ip.proto          = IPPROTO_TCP;
+
+
+
+    //match structs setting:
+    //set match rule for the protocol to use
+    //”-p tcp” part of our desirable rule
+    match_proto = (struct ipt_entry_match *) e->elems;
+    match_proto->u.match_size = size_ipt_entry_match + size_ipt_tcp;
+    strcpy(match_proto->u.user.name, "tcp");//set name of the module, we will use in this match
+
+    //set match rule for the packet number per time limitation - against DoS attacks
+    //”-m limit” part of our desirable rule
+    match_limit = (struct ipt_entry_match *) (e->elems + match_proto->u.match_size);
+    match_limit->u.match_size = size_ipt_entry_match + size_rateinfo;
+    strcpy(match_limit->u.user.name, "limit");//set name of the module, we will use in this match
+
+    //set match rule for specific Ethernet card (interface)
+    //”-m physdev” part of our desirable rule
+    match_physdev = (struct ipt_entry_match *) (e->elems + match_proto->u.match_size + match_limit->u.match_size);
+    match_physdev->u.match_size = size_ipt_entry_match + size_physdevinfo;
+    strcpy(match_physdev->u.user.name, "physdev");//set name of the module, we will use in this match
+
+    //tcp module - match extension
+    //”--sport 0:59136 --dport 0:51201” part of our desirable rule
+    tcpinfo = (struct ipt_tcp *)match_proto->data;
+
+    //limit module - match extension
+    //”-limit 2000/s --limit-burst 10” part of our desirable rule
+    rateinfo = (struct xt_rateinfo *)match_limit->data;
+    rateinfo->avg = 5;
+    rateinfo->burst = 10;
+
+    //physdev module - match extension
+    //”-in eth0” part of our desirable rule
+    physdevinfo = (struct xt_physdev_info *)match_physdev->data;
+    strcpy(physdevinfo->physindev, "eth0");
+    physdevinfo->bitmask = 1;
+
+
+    //target struct
+    target = (struct ipt_entry_target *)(e->elems + size_ipt_entry_match * 3 + size_ipt_tcp + size_rateinfo + size_physdevinfo);
+    target->u.target_size = size_ipt_entry_target;
+    strcpy(target->u.user.name, rule.target.c_str());
+
+
+    if (rule.ports.empty()) {
+        if (!iptc_append_entry (type.c_str(), e, handle)) {
+            log_error() << "Could not insert a rule in iptables " << iptc_strerror (errno);
+            return false;
+        }
+    } else {
+        for (auto port:rule.ports) {
+            tcpinfo->spts[0] = ntohs(port);
+            tcpinfo->spts[1] = ntohs(port);
+
+            if (!iptc_append_entry (type.c_str(), e, handle)) {
+                log_error() << "Could not add port filter "
+                        << port << " in iptables "
+                        << iptc_strerror (errno);
+                return false;
+            }
+        }
+    }
+
+
+    return true;
+}
+#endif
