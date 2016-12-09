@@ -39,6 +39,31 @@ ReturnCode DeviceNodeGateway::readConfigElement(const json_t *element)
         return ReturnCode::FAILURE;
     }
 
+    auto item = std::find_if(m_devList.begin(), m_devList.end(),
+        [&] (DeviceNodeParser::Device const &d) { return d.name == dev.name; });
+
+    if (item == std::end(m_devList)) {
+        m_devList.push_back(dev);
+    } else {
+        if ((item->major == dev.major) && (item->major == dev.minor)) {
+            if (dev.mode != item->mode) {
+                int mode = 0;
+
+                (dev.mode/100 >= item->mode/100) ?
+                        mode = (dev.mode/100) * 100 :  mode = (item->mode/100) * 100;
+                ((dev.mode/10)%10 >= (item->mode/10)%10) ?
+                        mode += ((dev.mode/10)%10 * 10) :  mode += ((item->mode/10)%10 * 10);
+                (dev.mode%10 >= item->mode%10) ?
+                        mode += (dev.mode%10) :  mode += (item->mode%10);
+                log_debug() << "mode for device " << dev.name << " will be changed to " << mode;
+                item->mode = mode;
+            }
+        } else {
+            //now we have a new device with same name
+            m_devList.push_back(dev);
+        }
+    }
+
     m_devList.push_back(dev);
     return ReturnCode::SUCCESS;
 }
