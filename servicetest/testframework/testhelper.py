@@ -76,20 +76,33 @@ class Helper(object):
             the previous run.
         """
         self._base_path = file_base_path
+    
 
-    @abc.abstractmethod
-    def write_result(self, data):
-        """ Write data to file.
-
-            What this method actually does is specific for each inheriting class,
-            which should all implement this method.
-        """
-        return
-
-
+class DeviceNodeHelper(Helper):
+    """ Helper for device node related things.
+        Currently supports ...
+    """
+    def __init__(self, file_base_path):
+        Helper.__init__(self, file_base_path)
+        
+    #### Below methods are executed inside container              
+    def stat(self, devicename):
+        os.system("stat -c %a " + devicename + " > device_mode");
+        
+    #### Below methods are executed on the host (in the tests)    
+    def remove_file(self):
+        try:
+            os.remove(self._base_path + "/device_mode")
+        except:
+            LOG("There is no file to remove")
+            
+    def mode(self):
+        with open(self._base_path + "/device_mode", "r") as fh:
+            dev_mode = fh.readline()
+        return dev_mode;
+    
 class NetworkHelper(Helper):
     """ Helper for network related things.
-
         Currently supports running 'ping' and 'ip' from inside the container.
     """
 
@@ -184,6 +197,7 @@ GET_ENV_VARS_OPTION = "get_env_vars"
 TEST_DIR_OPTION = "test_dir"
 DO_PING_OPTION = "do_ping"
 DO_IFCONFIG_OPTION = "do_ifconfig"
+GET_MODE_OPTION = "get_mode"
 
 if __name__ == "__main__":
     """ When the program is called from command line it is running inside
@@ -201,6 +215,14 @@ if __name__ == "__main__":
                         action="store_true",
                         dest=GET_ENV_VARS_OPTION,
                         help=get_env_vars_help_message)
+
+    get_mode_help_message = \
+    """ a value of file permissions of given device inside the container.
+    """
+    parser.add_argument("--do-get_mode",
+                        action="store",
+                        dest=GET_MODE_OPTION,
+                        help=get_mode_help_message)
 
     test_dir_help_message = \
     """ A path to a file in which to store the result of action
@@ -269,3 +291,11 @@ if __name__ == "__main__":
             env_vars = h.get_env_vars()
             # Dump the information for the helper to read back later in the tests
             h.write_result(env_vars)
+            
+        parsed_value = getattr(args, GET_MODE_OPTION)
+        if parsed_value is not None:
+            # Extract the actual file string
+            devicename = parsed_value.pop()
+            h = DeviceNodeHelper(test_file_base_path)
+            # Get the file permission inside the container
+            h.stat(devicename)
