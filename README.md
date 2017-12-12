@@ -1,4 +1,6 @@
 # SoftwareContainer
+[![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Fkursatkobya%2Fsoftwarecontainer.svg?type=shield)](https://app.fossa.io/projects/git%2Bgithub.com%2Fkursatkobya%2Fsoftwarecontainer?ref=badge_shield)
+
 
 The SoftwareContainer is a framework to manage and contain applications
 created and vetted by third party developers in an automotive setting. A
@@ -189,3 +191,6 @@ see the "LICENSE" file for more information. Text documents are
 licensed under creative commons 4.0
 
 SPDX-License-Identifier: CC-BY-4.0
+
+
+[![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Fkursatkobya%2Fsoftwarecontainer.svg?type=large)](https://app.fossa.io/projects/git%2Bgithub.com%2Fkursatkobya%2Fsoftwarecontainer?ref=badge_large)
